@@ -63,6 +63,30 @@ async function example() {
 example().catch(console.error);
 ```
 
+## Debugging
+
+Enable debug mode to see detailed protocol-level logging for troubleshooting connection and query issues:
+
+```javascript
+const conn = await connect({
+  user: 'admin',
+  password: 'password',
+  host: 'localhost',
+  port: 5480,
+  database: 'db1',
+  debug: true  // Enable debug logging
+});
+```
+
+When enabled, debug output is prefixed with `[node-netezza]` and includes:
+- SSL/TLS negotiation details
+- Authentication protocol messages
+- Query execution flow
+- Protocol message types and data
+- Field descriptions and data parsing
+
+**Note:** Debug mode should only be used during development as it produces verbose output.
+
 ## API Documentation
 
 ### Connection
@@ -78,7 +102,15 @@ Creates a new connection to Netezza.
 - `port` (number, default: 5480): Database port
 - `database` (string, required): Database name
 - `securityLevel` (number, default: 0): Security level (0-3)
+  - 0: Preferred unsecured session
+  - 1: Only unsecured session
+  - 2: Preferred secured session
+  - 3: Only secured session
 - `timeout` (number, optional): Connection timeout in milliseconds
+- `debug` (boolean, default: false): Enable debug logging to console
+- `ssl` (object, optional): SSL/TLS options
+  - `ca` (string | Buffer, optional): CA certificate for server verification
+  - `rejectUnauthorized` (boolean, default: true): Whether to reject unauthorized connections
 
 #### `connection.execute(sql, params?)`
 
