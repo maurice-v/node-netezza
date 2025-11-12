@@ -1,0 +1,34 @@
+# Source files (only include compiled dist/)
+src/
+tsconfig.json
+*.ts
+!*.d.ts
+
+# Development files
+examples/
+DEVELOPMENT.md
+PROJECT_SUMMARY.md
+.vscode/
+.git/
+.gitignore
+
+# Test files
+tests/
+*.test.js
+*.test.ts
+coverage/
+
+# Documentation (keep README, LICENSE, CHANGELOG)
+# but exclude development docs
+CONTRIBUTING.md
+
+# Build artifacts
+*.log
+npm-debug.log*
+.DS_Store
+*.swp
+*.swo
+
+# IDE files
+.idea/
+*.iml
