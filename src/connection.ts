@@ -89,8 +89,8 @@ export class Connection {
 
     return new Promise((resolve, reject) => {
       this.socket = net.createConnection({
-        host: this.options.host,
-        port: this.options.port,
+        host: this.options.host!,
+        port: this.options.port!,
         timeout: this.options.timeout
       });
 

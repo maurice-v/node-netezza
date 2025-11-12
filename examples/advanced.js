@@ -1,4 +1,4 @@
-const { connect } = require('./dist/index');
+const { connect } = require('../dist/index');
 
 /**
  * Example using async/await with connection pooling simulation

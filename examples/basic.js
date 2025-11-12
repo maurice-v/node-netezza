@@ -1,4 +1,4 @@
-const { connect } = require('./dist/index');
+const { connect } = require('../dist/index');
 
 async function example() {
   // Create connection
