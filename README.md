@@ -53,7 +53,7 @@ async function example() {
     );
 
     for (const row of results.rows) {
-      console.log(row);
+      console.log(row);  // { id: 1, name: 'John Doe', email: 'john@example.com' }
     }
   } finally {
     await conn.close();
@@ -61,6 +61,29 @@ async function example() {
 }
 
 example().catch(console.error);
+```
+
+### Array Row Mode
+
+For handling duplicate column names or improved performance, use `rowMode: 'array'`:
+
+```javascript
+const conn = await connect({
+  user: 'admin',
+  password: 'password',
+  database: 'db1',
+  rowMode: 'array'  // Return rows as arrays
+});
+
+const results = await conn.execute('SELECT id, name, email FROM customers');
+for (const row of results.rows) {
+  console.log(row);  // [1, 'John Doe', 'john@example.com']
+  console.log('ID:', row[0], 'Name:', row[1], 'Email:', row[2]);
+}
+
+// Handles duplicate column names
+const dupes = await conn.execute('SELECT 1 as value, 2 as value');
+console.log(dupes.rows[0]);  // [1, 2] - all values preserved!
 ```
 
 ## Debugging
@@ -108,6 +131,10 @@ Creates a new connection to Netezza.
   - 3: Only secured session
 - `timeout` (number, optional): Connection timeout in milliseconds
 - `debug` (boolean, default: false): Enable debug logging to console
+- `rowMode` (string, default: 'object'): Row return format
+  - `'object'`: Returns rows as objects with column names as keys (e.g., `{ id: 1, name: 'John' }`)
+  - `'array'`: Returns rows as arrays with values in column order (e.g., `[1, 'John']`)
+  - Array mode is useful for handling duplicate column names and can be slightly more efficient
 - `ssl` (object, optional): SSL/TLS options
   - `ca` (string | Buffer, optional): CA certificate for server verification
   - `rejectUnauthorized` (boolean, default: true): Whether to reject unauthorized connections

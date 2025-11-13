@@ -25,6 +25,7 @@ export interface ConnectionOptions {
   timeout?: number;
   applicationName?: string;
   debug?: boolean;
+  rowMode?: 'object' | 'array';
   ssl?: {
     ca?: string | Buffer;
     rejectUnauthorized?: boolean;
@@ -32,7 +33,7 @@ export interface ConnectionOptions {
 }
 
 /**
- * Query result row
+ * Query result row (object format)
  */
 export interface QueryRow {
   [key: string]: any;
@@ -42,7 +43,7 @@ export interface QueryRow {
  * Query result
  */
 export interface QueryResult {
-  rows: QueryRow[];
+  rows: QueryRow[] | any[][];
   rowCount: number;
   command?: string;
   fields?: FieldDescription[];
@@ -82,6 +83,7 @@ export class Connection {
       securityLevel: 0,
       timeout: 30000,
       debug: false,
+      rowMode: 'object',
       ...options
     };
   }
@@ -792,7 +794,7 @@ export class Connection {
       } else if (messageType[0] === protocol.MESSAGE_TYPE_DATA_ROW) {
         if (fields) {
           const row = this.parseDataRow(data, fields);
-          result.rows.push(row);
+          (result.rows as any[]).push(row);
         }
       } else if (messageType[0] === protocol.MESSAGE_TYPE_COMMAND_COMPLETE) {
         const commandStr = data.toString('utf8', 0, data.length - 1);
@@ -857,7 +859,7 @@ export class Connection {
       } else if (messageType[0] === protocol.MESSAGE_TYPE_DATA_ROW) {
         if (fields) {
           const row = this.parseDataRow(data, fields);
-          result.rows.push(row);
+          (result.rows as any[]).push(row);
         }
       } else if (messageType[0] === protocol.MESSAGE_TYPE_COMMAND_COMPLETE) {
         const commandStr = data.toString('utf8', 0, data.length - 1);
@@ -930,8 +932,9 @@ export class Connection {
   /**
    * Parse data row (Netezza format with bitmap for NULL values)
    */
-  private parseDataRow(data: Buffer, fields: FieldDescription[]): QueryRow {
-    const row: QueryRow = {};
+  private parseDataRow(data: Buffer, fields: FieldDescription[]): QueryRow | any[] {
+    const isArrayMode = this.options.rowMode === 'array';
+    const row: QueryRow | any[] = isArrayMode ? [] : {};
     
     // Calculate bitmap length
     const columnCount = fields.length;
@@ -954,7 +957,11 @@ export class Connection {
       
       if (bitmap[i] === 0) {
         // NULL value
-        row[field.name] = null;
+        if (isArrayMode) {
+          (row as any[]).push(null);
+        } else {
+          (row as QueryRow)[field.name] = null;
+        }
       } else {
         // Read length (4 bytes) and data
         const valueLength = data.readInt32BE(dataIdx);
@@ -966,11 +973,18 @@ export class Connection {
         
         // Convert value based on type
         const converter = getTypeConverter(field.typeOid);
+        let value: any;
         try {
-          row[field.name] = converter.decode(valueBuffer);
+          value = converter.decode(valueBuffer);
         } catch (err) {
           // Fallback to string
-          row[field.name] = valueBuffer.toString('utf8');
+          value = valueBuffer.toString('utf8');
+        }
+        
+        if (isArrayMode) {
+          (row as any[]).push(value);
+        } else {
+          (row as QueryRow)[field.name] = value;
         }
       }
     }
