@@ -2,6 +2,22 @@
 
 All notable changes to node-netezza will be documented in this file.
 
+## [1.1.0] - 2025-11-13
+
+### Added
+- **Row mode option** (`rowMode`) for controlling row return format
+  - `'object'` mode (default): Returns rows as objects with column names as keys
+  - `'array'` mode: Returns rows as arrays with values in column order
+- Array mode solves the duplicate column name issue (e.g., `SELECT 1 as a, 2 as a`)
+- New example `array-rows.js` demonstrating both row modes and duplicate column handling
+
+### Changed
+- `QueryResult.rows` type updated to support both `QueryRow[]` and `any[][]`
+
+### Improved
+- Documentation updated with array mode usage examples
+- All examples validated and connection details updated
+
 ## [1.0.0] - 2025-01-01
 
 ### Added
