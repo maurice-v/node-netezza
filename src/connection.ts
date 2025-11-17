@@ -10,7 +10,7 @@ import {
   ProgrammingError
 } from './errors';
 import * as protocol from './protocol';
-import { getTypeConverter } from './types';
+import { getTypeConverter, TypeConverterContext } from './types';
 
 /**
  * Connection options
@@ -20,7 +20,7 @@ export interface ConnectionOptions {
   password: string;
   host?: string;
   port?: number;
-  database: string;
+  database?: string;
   securityLevel?: number;
   timeout?: number;
   applicationName?: string;
@@ -29,6 +29,16 @@ export interface ConnectionOptions {
   ssl?: {
     ca?: string | Buffer;
     rejectUnauthorized?: boolean;
+  };
+  /**
+   * Return raw string values for specific types
+   * Useful for avoiding overflow (bigint) and timezone issues (dates)
+   */
+  rawTypes?: {
+    bigint?: boolean;      // Return BIGINT as string
+    date?: boolean;        // Return DATE as string
+    timestamp?: boolean;   // Return TIMESTAMP as string
+    numeric?: boolean;     // Return NUMERIC/DECIMAL as string
   };
 }
 
@@ -75,16 +85,30 @@ export class Connection {
   private hsVersion?: number;
   private protocol1?: number;
   private protocol2: number = 0;
+  private typeConverterContext: TypeConverterContext;
 
   constructor(options: ConnectionOptions) {
     this.options = {
       host: 'localhost',
       port: 5480,
+      database: 'SYSTEM',
       securityLevel: 0,
       timeout: 30000,
       debug: false,
       rowMode: 'object',
-      ...options
+      ...options,
+      rawTypes: {
+        bigint: false,
+        date: false,
+        timestamp: false,
+        numeric: false,
+        ...options.rawTypes  // Merge user's partial config
+      }
+    };
+
+    // Prepare type converter context
+    this.typeConverterContext = {
+      rawTypes: this.options.rawTypes
     };
   }
 
@@ -196,9 +220,23 @@ export class Connection {
       throw new InterfaceError('No socket available for TLS upgrade');
     }
 
+    this.debugLog('Upgrading to TLS...');
+    this.debugLog('Buffer before TLS upgrade:', this.buffer.length, 'bytes:', this.buffer.toString('hex'));
+
+    // Remove all existing listeners before TLS upgrade
+    this.socket.removeAllListeners('data');
+    this.socket.removeAllListeners('error');
+    this.socket.removeAllListeners('end');
+
+    // Pause the socket to prevent data events during TLS upgrade
+    if (this.socket.pause) {
+      this.socket.pause();
+    }
+
     return new Promise((resolve, reject) => {
       const tlsOptions: tls.ConnectionOptions = {
         socket: this.socket as net.Socket,
+        servername: this.options.host,  // SNI (Server Name Indication)
         rejectUnauthorized: this.options.ssl?.rejectUnauthorized !== false,
       };
 
@@ -211,44 +249,18 @@ export class Connection {
 
       secureSocket.on('secureConnect', async () => {
         this.debugLog('TLS connection established');
-        
+
         // Replace the socket with the TLS socket
         this.socket = secureSocket;
-        
+
         // Re-attach data handler to TLS socket
         secureSocket.on('data', (data) => {
           this.buffer = Buffer.concat([this.buffer, data]);
         });
 
-        // Send HSV2_SSL_CONNECT to confirm SSL connection
-        const connectPayload = Buffer.alloc(6);
-        connectPayload.writeUInt16BE(protocol.HSV2_SSL_CONNECT, 0);
-        connectPayload.writeInt32BE(this.options.securityLevel || 0, 2);
-        const connectMessage = Buffer.alloc(4 + connectPayload.length);
-        connectMessage.writeInt32BE(connectPayload.length + 4, 0);
-        connectPayload.copy(connectMessage, 4);
-        this.sendRawMessage(connectMessage);
-
-        // Wait for confirmation
-        try {
-          const confirmResp = await this.readBytes(1);
-          if (confirmResp[0] === 0x4E) { // 'N' - SSL connection confirmed
-            this.debugLog('SSL connection confirmed by server');
-            resolve();
-          } else if (confirmResp[0] === 0x45) { // 'E' - Error
-            const errorMsg = [];
-            while (true) {
-              const byte = await this.readBytes(1);
-              if (byte[0] === 0x00) break;
-              errorMsg.push(byte[0]);
-            }
-            reject(new InterfaceError(`SSL connection error: ${Buffer.from(errorMsg).toString('utf8')}`));
-          } else {
-            reject(new InterfaceError('Unexpected SSL connection response'));
-          }
-        } catch (err) {
-          reject(err);
-        }
+        // TLS is now established, resolve immediately
+        this.debugLog('TLS upgrade complete');
+        resolve();
       });
 
       secureSocket.on('error', (err) => {
@@ -262,7 +274,7 @@ export class Connection {
    */
   private async sendHandshakeInfo(): Promise<void> {
     // 1. Send database FIRST (Netezza needs this before security negotiation)
-    await this.sendHandshakeField(protocol.HSV2_DB, this.options.database);
+    await this.sendHandshakeField(protocol.HSV2_DB, this.options.database!);
     
     // Wait for database acknowledgment
     const dbResp = await this.readBytes(1);
@@ -283,12 +295,30 @@ export class Connection {
     
     // Wait for SSL response
     const sslResp = await this.readBytes(1);
-    
+
     if (sslResp[0] === 0x4E) { // 'N' - OK, no SSL needed
       this.debugLog('SSL negotiated: no encryption');
     } else if (sslResp[0] === 0x53) { // 'S' - SSL required
-      this.debugLog('Server requires SSL, establishing secure connection...');
+      this.debugLog('Server requires SSL, upgrading connection...');
+      // Send HSV2_SSL_CONNECT to tell server we're ready for TLS
+      const connectPayload = Buffer.alloc(6);
+      connectPayload.writeUInt16BE(protocol.HSV2_SSL_CONNECT, 0);
+      connectPayload.writeInt32BE(this.options.securityLevel || 0, 2);
+      const connectMessage = Buffer.alloc(4 + connectPayload.length);
+      connectMessage.writeInt32BE(connectPayload.length + 4, 0);
+      connectPayload.copy(connectMessage, 4);
+      this.sendRawMessage(connectMessage);
+      this.debugLog('Sent HSV2_SSL_CONNECT, now upgrading to TLS...');
+
+      // Now upgrade to TLS
       await this.upgradeToTLS();
+
+      // Read acknowledgment of HSV2_SSL_CONNECT (sent before TLS upgrade)
+      const connectResp = await this.readBytes(1);
+      this.debugLog('HSV2_SSL_CONNECT response:', connectResp[0], 'hex:', connectResp[0].toString(16), 'char:', String.fromCharCode(connectResp[0]));
+      if (connectResp[0] !== 0x4E) { // 'N'
+        throw new InterfaceError('Expected SSL connection acknowledgment');
+      }
     } else if (sslResp[0] === 0x45) { // 'E' - Error
       const errorMsg = [];
       while (true) {
@@ -975,7 +1005,7 @@ export class Connection {
         const converter = getTypeConverter(field.typeOid);
         let value: any;
         try {
-          value = converter.decode(valueBuffer);
+          value = converter.decode(valueBuffer, this.typeConverterContext);
         } catch (err) {
           // Fallback to string
           value = valueBuffer.toString('utf8');
