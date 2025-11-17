@@ -2,8 +2,20 @@
  * Type conversion utilities for Netezza data types
  */
 
+/**
+ * Context for type conversion
+ */
+export interface TypeConverterContext {
+  rawTypes?: {
+    bigint?: boolean;
+    date?: boolean;
+    timestamp?: boolean;
+    numeric?: boolean;
+  };
+}
+
 export interface TypeConverter {
-  decode: (data: Buffer) => any;
+  decode: (data: Buffer, context?: TypeConverterContext) => any;
   encode: (value: any) => Buffer;
 }
 
@@ -68,8 +80,14 @@ export function bufferToTimestamp(buffer: Buffer): Date {
 export const typeConverters: { [key: number]: TypeConverter } = {
   // INTEGER types
   20: { // BIGINT
-    decode: bufferToInt,
-    encode: (value: number) => stringToBuffer(value.toString())
+    decode: (buffer: Buffer, context?: TypeConverterContext) => {
+      const str = bufferToString(buffer);
+      if (context?.rawTypes?.bigint) {
+        return str; // Return raw string to avoid overflow
+      }
+      return parseInt(str, 10);
+    },
+    encode: (value: number | string) => stringToBuffer(value.toString())
   },
   21: { // SMALLINT
     decode: bufferToInt,
@@ -79,7 +97,7 @@ export const typeConverters: { [key: number]: TypeConverter } = {
     decode: bufferToInt,
     encode: (value: number) => stringToBuffer(value.toString())
   },
-  
+
   // NUMERIC types
   700: { // FLOAT4
     decode: bufferToFloat,
@@ -90,10 +108,16 @@ export const typeConverters: { [key: number]: TypeConverter } = {
     encode: (value: number) => stringToBuffer(value.toString())
   },
   1700: { // NUMERIC
-    decode: bufferToFloat,
-    encode: (value: number) => stringToBuffer(value.toString())
+    decode: (buffer: Buffer, context?: TypeConverterContext) => {
+      const str = bufferToString(buffer);
+      if (context?.rawTypes?.numeric) {
+        return str; // Return raw string for precision
+      }
+      return parseFloat(str);
+    },
+    encode: (value: number | string) => stringToBuffer(value.toString())
   },
-  
+
   // STRING types
   25: { // TEXT
     decode: bufferToString,
@@ -107,17 +131,28 @@ export const typeConverters: { [key: number]: TypeConverter } = {
     decode: bufferToString,
     encode: stringToBuffer
   },
-  
+
   // BOOLEAN
   16: {
     decode: bufferToBoolean,
     encode: (value: boolean) => stringToBuffer(value ? 't' : 'f')
   },
-  
+
   // DATE/TIME types
   1082: { // DATE
-    decode: bufferToDate,
-    encode: (value: Date) => stringToBuffer(value.toISOString().split('T')[0])
+    decode: (buffer: Buffer, context?: TypeConverterContext) => {
+      const str = bufferToString(buffer);
+      if (context?.rawTypes?.date) {
+        return str; // Return raw string to preserve exact format
+      }
+      return new Date(str);
+    },
+    encode: (value: Date | string) => {
+      if (value instanceof Date) {
+        return stringToBuffer(value.toISOString().split('T')[0]);
+      }
+      return stringToBuffer(value);
+    }
   },
   1083: { // TIME
     decode: bufferToString,
@@ -129,10 +164,21 @@ export const typeConverters: { [key: number]: TypeConverter } = {
     }
   },
   1114: { // TIMESTAMP
-    decode: bufferToTimestamp,
-    encode: (value: Date) => stringToBuffer(value.toISOString())
+    decode: (buffer: Buffer, context?: TypeConverterContext) => {
+      const str = bufferToString(buffer);
+      if (context?.rawTypes?.timestamp) {
+        return str; // Return raw string to preserve timezone and precision
+      }
+      return new Date(str);
+    },
+    encode: (value: Date | string) => {
+      if (value instanceof Date) {
+        return stringToBuffer(value.toISOString());
+      }
+      return stringToBuffer(value);
+    }
   },
-  
+
   // BYTEA
   17: {
     decode: (buffer: Buffer) => buffer,
