@@ -19,7 +19,7 @@
   "author": "node-netezza contributors",
   "license": "BSD-3-Clause",
   "dependencies": {
-    "node-netezza": "^1.0.0"
+    "node-netezza": "^1.1.0"
   },
   "devDependencies": {
     "@types/jest": "^29.0.0",
