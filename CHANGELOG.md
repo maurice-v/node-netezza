@@ -2,6 +2,35 @@
 
 All notable changes to node-netezza will be documented in this file.
 
+## [1.2.0] - 2025-11-19
+
+### Added
+- **Connection pooling** with built-in Pool class
+  - Configurable min/max connections
+  - Automatic connection lifecycle management
+  - Connection reuse and resource pooling
+  - Pool statistics and monitoring
+  - Transaction support within pool
+- **Raw type handling** for precision-critical data types
+  - BIGINT values returned as strings to prevent JavaScript number overflow
+  - DATE, TIMESTAMP, and NUMERIC types preserved as strings
+  - Maintains precision for financial and scientific calculations
+- **SSL connection fixes** and improvements
+- **Unit tests** with Jest framework
+  - Comprehensive test coverage for core functionality
+  - Integration tests for production systems
+  - Centralized test configuration
+
+### Changed
+- Enhanced type handling to preserve data precision
+- Improved error handling in connection management
+
+### Examples
+- Added `pool-basic.js` - Basic connection pooling usage
+- Added `pool-transactions.js` - Transaction handling with pools
+- Added `raw-values.js` - Raw type handling demonstration
+- Centralized configuration for examples and tests
+
 ## [1.1.0] - 2025-11-13
 
 ### Added
