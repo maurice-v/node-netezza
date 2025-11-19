@@ -1,16 +1,12 @@
 const { connect } = require('../dist/index');
+const config = require('./config');
 
 async function example() {
   // Create connection with debug mode enabled
   console.log('Connecting to Netezza with DEBUG mode enabled...');
   
   const conn = await connect({
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'testdb',
-    securityLevel: 1,
+    ...config,
     debug: true  // Enable debug logging
   });
 

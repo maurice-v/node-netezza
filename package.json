@@ -1,13 +1,17 @@
 {
   "name": "node-netezza",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Pure Node.js driver for IBM Netezza",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "prepublishOnly": "npm run build"
+    "test:unit": "jest src/",
+    "test:integration": "jest tests/integration/",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch",
+    "prepublishOnly": "npm run build && npm run test:unit"
   },
   "keywords": [
     "netezza",

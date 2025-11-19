@@ -1,0 +1,22 @@
+/**
+ * Test configuration template for node-netezza
+ * 
+ * Copy this file to `test.config.js` and update with your credentials.
+ * 
+ * You can also override these settings with environment variables:
+ * - NETEZZA_HOST
+ * - NETEZZA_PORT
+ * - NETEZZA_DATABASE
+ * - NETEZZA_USER
+ * - NETEZZA_PASSWORD
+ * - NETEZZA_SECURITY_LEVEL
+ */
+
+module.exports = {
+  host: process.env.NETEZZA_HOST || 'your-netezza-host',
+  port: parseInt(process.env.NETEZZA_PORT || '5480', 10),
+  database: process.env.NETEZZA_DATABASE || 'your-database',
+  user: process.env.NETEZZA_USER || 'your-username',
+  password: process.env.NETEZZA_PASSWORD || 'your-password',
+  securityLevel: parseInt(process.env.NETEZZA_SECURITY_LEVEL || '1', 10)
+};
