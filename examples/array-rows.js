@@ -1,16 +1,12 @@
 const { connect } = require('../dist/index');
+const config = require('./config');
 
 async function example() {
   // Create connection with rowMode set to 'array'
   console.log('Connecting to Netezza with rowMode: array...');
   
   const conn = await connect({
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'testdb',
-    securityLevel: 1,
+    ...config,
     rowMode: 'array'  // Return rows as arrays instead of objects
   });
 
@@ -106,15 +102,8 @@ async function compareWithObjectMode() {
   console.log('COMPARISON: Object mode (default)');
   console.log('========================================\n');
 
-  const conn = await connect({
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'testdb',
-    securityLevel: 1
+  const conn = await connect(config);
     // rowMode defaults to 'object'
-  });
 
   try {
     // Create and populate table

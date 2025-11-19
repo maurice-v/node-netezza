@@ -2,19 +2,13 @@
  * Raw values example - avoiding overflow and timezone issues
  */
 
-const { connect } = require('node-netezza');
+const { connect } = require('../dist/index');
+const config = require('./config');
 
 async function rawValuesExample() {
   // Without raw values (default behavior)
   console.log('=== Without Raw Values ===');
-  const conn1 = await connect({
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'db1',
-    securityLevel: 1
-  });
+  const conn1 = await connect(config);
 
   try {
     const result1 = await conn1.execute(`
@@ -45,12 +39,7 @@ async function rawValuesExample() {
 
   // With raw values
   const conn2 = await connect({
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'db1',
-    securityLevel: 1,
+    ...config,
     rawTypes: {
       bigint: true,
       timestamp: true,

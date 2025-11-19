@@ -1,4 +1,5 @@
 const { connect } = require('../dist/index');
+const config = require('./config');
 
 async function example() {
   // Create connection
@@ -6,14 +7,7 @@ async function example() {
   
   let conn = null;
   try {
-    conn = await connect({
-      user: 'admin',
-      password: 'password',
-      host: 'localhost',
-      port: 5480,
-      database: 'testdb',
-      securityLevel: 1
-    });
+    conn = await connect(config);
 
     console.log('Connected successfully!');
     

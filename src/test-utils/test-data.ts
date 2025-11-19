@@ -8,8 +8,8 @@ import { FieldDescription } from '../connection';
  * Sample connection options
  */
 export const testConnectionOptions = {
-  user: 'testuser',
-  password: 'testpass',
+  user: 'admin',
+  password: '***REMOVED***',
   host: 'localhost',
   port: 5480,
   database: 'testdb',

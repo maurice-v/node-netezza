@@ -1,4 +1,5 @@
 const { connect } = require('../dist/index');
+const config = require('./config');
 
 /**
  * Example using async/await with connection pooling simulation
@@ -52,14 +53,7 @@ class ConnectionPool {
 async function advancedExample() {
   console.log('Creating connection pool...');
   
-  const pool = new ConnectionPool({
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'testdb',
-    securityLevel: 1
-  }, 3); // Pool of 3 connections
+  const pool = new ConnectionPool(config, 3); // Pool of 3 connections
 
   try {
     await pool.initialize();

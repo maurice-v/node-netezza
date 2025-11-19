@@ -2,18 +2,13 @@
  * Basic connection pooling example
  */
 
-const { createPool } = require('node-netezza');
+const { createPool } = require('../dist/index');
+const config = require('./config');
 
 async function basicPoolExample() {
   // Create a connection pool
   const pool = createPool({
-    // Connection options
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'db1',
-    securityLevel: 1,
+    ...config,
     // Pool-specific options
     max: 10,       // Maximum 10 connections
     min: 2         // Maintain at least 2 connections
@@ -22,18 +17,21 @@ async function basicPoolExample() {
   try {
     // Execute queries directly on the pool
     // The pool automatically acquires and releases connections
-    const customers = await pool.execute('SELECT * FROM customers LIMIT 10');
-    console.log('Customers:', customers.rows);
+    
+    // Simple test queries
+    console.log('Testing pool with simple queries...');
+    const result1 = await pool.execute('SELECT 1 as test_value');
+    console.log('Query 1:', result1.rows);
 
-    const orders = await pool.execute(
-      'SELECT * FROM orders WHERE customer_id = ?',
-      [1]
-    );
-    console.log('Orders:', orders.rows);
+    const result2 = await pool.execute('SELECT CURRENT_TIMESTAMP as now');
+    console.log('Query 2:', result2.rows);
+
+    const result3 = await pool.execute('SELECT ? as param_test', ['Hello from pool!']);
+    console.log('Query 3:', result3.rows);
 
     // Check pool statistics
     const stats = pool.getStats();
-    console.log('Pool Stats:', {
+    console.log('\nPool Stats:', {
       total: stats.total,
       available: stats.available,
       inUse: stats.inUse,

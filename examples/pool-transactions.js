@@ -2,17 +2,12 @@
  * Connection pooling with transactions example
  */
 
-const { createPool } = require('node-netezza');
+const { createPool } = require('../dist/index');
+const config = require('./config');
 
 async function transactionExample() {
   const pool = createPool({
-    // Connection options
-    user: 'admin',
-    password: 'password',
-    host: 'localhost',
-    port: 5480,
-    database: 'db1',
-    securityLevel: 1,
+    ...config,
     // Pool-specific options
     max: 10
   });
@@ -24,27 +19,34 @@ async function transactionExample() {
     try {
       // Start transaction
       await conn.execute('BEGIN');
+      console.log('Transaction started');
+
+      // Create a temp table for demonstration
+      await conn.execute(
+        `CREATE TEMP TABLE temp_orders (
+          id INTEGER,
+          customer_id INTEGER,
+          amount NUMERIC(10,2)
+        )`
+      );
+      console.log('Created temp table');
 
       // Perform multiple operations
       await conn.execute(
-        'INSERT INTO orders (id, customer_id, amount) VALUES (?, ?, ?)',
+        'INSERT INTO temp_orders (id, customer_id, amount) VALUES (?, ?, ?)',
         [101, 1, 250.00]
       );
+      console.log('Inserted order 101');
 
       await conn.execute(
-        'UPDATE customers SET total_spent = total_spent + ? WHERE id = ?',
-        [250.00, 1]
+        'INSERT INTO temp_orders (id, customer_id, amount) VALUES (?, ?, ?)',
+        [102, 1, 150.00]
       );
+      console.log('Inserted order 102');
 
-      await conn.execute(
-        'INSERT INTO order_items (order_id, product_id, quantity) VALUES (?, ?, ?)',
-        [101, 50, 2]
-      );
-
-      await conn.execute(
-        'UPDATE products SET stock = stock - ? WHERE id = ?',
-        [2, 50]
-      );
+      // Query the data
+      const result = await conn.execute('SELECT * FROM temp_orders');
+      console.log('Orders in transaction:', result.rows);
 
       // Commit transaction
       await conn.execute('COMMIT');

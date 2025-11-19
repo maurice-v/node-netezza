@@ -23,8 +23,8 @@ describe('Pool Class', () => {
     setMockSocket(mockSocket);
 
     poolOptions = {
-      user: 'testuser',
-      password: 'testpass',
+      user: 'admin',
+      password: '***REMOVED***',
       host: 'localhost',
       port: 5480,
       database: 'testdb',
