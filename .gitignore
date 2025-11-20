@@ -22,7 +22,6 @@ coverage/
 # Test configuration (contains credentials)
 test.config.js
 examples/config.js
-passwords.txt
 
 # IDE & Editors
 .vscode/
@@ -45,3 +44,6 @@ desktop.ini
 .env
 .env.local
 .env.*.local
+
+# Sensitive data
+passwords.txt
