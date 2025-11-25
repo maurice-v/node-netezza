@@ -1,6 +1,6 @@
 {
   "name": "node-netezza",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Pure Node.js driver for IBM Netezza",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,8 +14,8 @@
     "prepublishOnly": "npm run build && npm run test:unit"
   },
   "keywords": [
-    "netezza",
-    "nz",
+    "Netezza",
+    "Nz",
     "IBM",
     "PureData System for Analytics",
     "database",
