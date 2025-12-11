@@ -772,27 +772,43 @@ export class Connection {
         cancelSocket.write(cancelMessage, () => {
           this.debugLog('Cancel request sent');
           
+          let timeoutId: NodeJS.Timeout | undefined;
+          let resolved = false;
+          
+          const cleanup = () => {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+              timeoutId = undefined;
+            }
+            cancelSocket.removeAllListeners('data');
+            cancelSocket.removeAllListeners('end');
+          };
+          
+          const resolveOnce = () => {
+            if (!resolved) {
+              resolved = true;
+              cleanup();
+              cancelSocket.destroy();
+              resolve();
+            }
+          };
+          
           // Read the response (server will close connection after acknowledging)
           cancelSocket.once('data', (data) => {
             this.debugLog('Cancel response:', data.toString('hex'));
-            cancelSocket.destroy();
-            resolve();
+            resolveOnce();
           });
 
           // Server may also just close the connection without sending data
           cancelSocket.once('end', () => {
             this.debugLog('Cancel socket closed by server');
-            cancelSocket.destroy();
-            resolve();
+            resolveOnce();
           });
 
           // Set a short timeout for the response
-          setTimeout(() => {
-            if (!cancelSocket.destroyed) {
-              this.debugLog('Cancel response timeout, assuming success');
-              cancelSocket.destroy();
-              resolve();
-            }
+          timeoutId = setTimeout(() => {
+            this.debugLog('Cancel response timeout, assuming success');
+            resolveOnce();
           }, 1000);
         });
       });
@@ -813,24 +829,47 @@ export class Connection {
   private async drainUntilReady(): Promise<void> {
     this.debugLog('Draining messages until ReadyForQuery...');
     
-    while (true) {
-      const messageType = await this.readBytes(1);
-      this.debugLog('Drain message type:', messageType[0], 'char:', String.fromCharCode(messageType[0]));
+    const maxIterations = 1000; // Prevent infinite loops
+    let iterations = 0;
+    
+    while (iterations < maxIterations) {
+      iterations++;
       
-      // Read unused bytes and length
-      const unused = await this.readBytes(4);
-      const length = await this.readInt32();
-      const data = await this.readBytes(length);
-      
-      if (messageType[0] === protocol.MESSAGE_TYPE_READY_FOR_QUERY) {
-        this.debugLog('Drain complete - ReadyForQuery received');
-        this.transactionStatus = data[0];
-        return;
+      try {
+        // Check if connection is still alive
+        if (!this.socket || this.socket.destroyed) {
+          throw new ConnectionClosedError('Connection closed during drain');
+        }
+        
+        const messageType = await this.readBytes(1);
+        this.debugLog('Drain message type:', messageType[0], 'char:', String.fromCharCode(messageType[0]));
+        
+        // Read unused bytes and length
+        await this.readBytes(4);
+        const length = await this.readInt32();
+        const data = await this.readBytes(length);
+        
+        if (messageType[0] === protocol.MESSAGE_TYPE_READY_FOR_QUERY) {
+          this.debugLog('Drain complete - ReadyForQuery received');
+          this.transactionStatus = data[0];
+          return;
+        }
+        
+        // Log but continue draining for other message types
+        this.debugLog('Drained message type:', messageType[0], 'length:', length);
+      } catch (error) {
+        // If connection error occurs during drain, log and re-throw
+        this.debugLog('Error during drain:', error);
+        throw new OperationalError(
+          `Failed to drain messages: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
-      
-      // Log but continue draining for other message types
-      this.debugLog('Drained message type:', messageType[0], 'length:', length);
     }
+    
+    // If we hit max iterations, something is wrong
+    throw new OperationalError(
+      `Failed to receive ReadyForQuery after ${maxIterations} messages. Connection may be in an invalid state.`
+    );
   }
 
   /**
