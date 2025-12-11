@@ -64,3 +64,12 @@ export class ConnectionClosedError extends InterfaceError {
     this.name = 'ConnectionClosedError';
   }
 }
+
+export class QueryCancelledError extends OperationalError {
+  readonly code = 'QUERY_CANCELLED';
+  
+  constructor(message: string = 'Query was cancelled') {
+    super(message);
+    this.name = 'QueryCancelledError';
+  }
+}

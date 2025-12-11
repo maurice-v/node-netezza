@@ -2,8 +2,8 @@
  * Unit tests for Connection class
  */
 
-import { Connection, ConnectionOptions } from '../connection';
-import { InterfaceError, OperationalError, ConnectionClosedError } from '../errors';
+import { Connection, ConnectionOptions, CancellableQuery } from '../connection';
+import { InterfaceError, OperationalError, ConnectionClosedError, QueryCancelledError } from '../errors';
 import { MockSocket } from '../test-utils/mock-socket';
 import * as protocol from '../protocol';
 
@@ -97,9 +97,9 @@ describe('Connection Class', () => {
       const conn = new Connection(connectionOptions);
       expect(typeof conn.execute).toBe('function');
 
-      // Verify it returns a promise
+      // Verify it returns a CancellableQuery (which implements Promise)
       const result = conn.execute('SELECT 1');
-      expect(result).toBeInstanceOf(Promise);
+      expect(result).toBeInstanceOf(CancellableQuery);
 
       // Clean up the promise rejection
       result.catch(() => {});
@@ -108,9 +108,9 @@ describe('Connection Class', () => {
     it('should handle parameterized query signature', () => {
       const conn = new Connection(connectionOptions);
 
-      // Verify execute accepts parameters
+      // Verify execute accepts parameters and returns CancellableQuery
       const result = conn.execute('SELECT * FROM users WHERE id = ?', [42]);
-      expect(result).toBeInstanceOf(Promise);
+      expect(result).toBeInstanceOf(CancellableQuery);
 
       // Clean up the promise rejection
       result.catch(() => {});
@@ -154,6 +154,123 @@ describe('Connection Class', () => {
       });
 
       expect(conn).toBeInstanceOf(Connection);
+    });
+  });
+
+  describe('CancellableQuery', () => {
+    it('should create a CancellableQuery from execute', () => {
+      const conn = new Connection(connectionOptions);
+      const query = conn.execute('SELECT 1');
+      
+      expect(query).toBeInstanceOf(CancellableQuery);
+      expect(query.isCancelled).toBe(false);
+      expect(typeof query.cancel).toBe('function');
+      
+      // Clean up the promise rejection
+      query.catch(() => {});
+    });
+
+    it('should have cancel method that returns a promise', () => {
+      const conn = new Connection(connectionOptions);
+      const query = conn.execute('SELECT 1');
+      
+      const cancelResult = query.cancel();
+      expect(cancelResult).toBeInstanceOf(Promise);
+      
+      // Clean up the promise rejections
+      query.catch(() => {});
+      cancelResult.catch(() => {});
+    });
+
+    it('should mark query as cancelled after cancel is called', async () => {
+      const conn = new Connection(connectionOptions);
+      const query = conn.execute('SELECT 1');
+      
+      expect(query.isCancelled).toBe(false);
+      
+      // Note: Cancel will fail because we don't have a real connection,
+      // but isCancelled should still be set
+      try {
+        await query.cancel();
+      } catch (e) {
+        // Expected to fail without real connection
+      }
+      
+      expect(query.isCancelled).toBe(true);
+      
+      // Clean up
+      query.catch(() => {});
+    });
+
+    it('should only cancel once even if cancel is called multiple times', async () => {
+      const conn = new Connection(connectionOptions);
+      const query = conn.execute('SELECT 1');
+      
+      // First cancel
+      const cancel1 = query.cancel().catch(() => {});
+      
+      // Second cancel should be a no-op
+      const cancel2 = query.cancel().catch(() => {});
+      
+      // Both should resolve without error on the second call
+      await Promise.all([cancel1, cancel2]);
+      
+      expect(query.isCancelled).toBe(true);
+      
+      // Clean up
+      query.catch(() => {});
+    });
+
+    it('should implement Promise interface', () => {
+      const conn = new Connection(connectionOptions);
+      const query = conn.execute('SELECT 1');
+      
+      // Test then
+      expect(typeof query.then).toBe('function');
+      
+      // Test catch
+      expect(typeof query.catch).toBe('function');
+      
+      // Test finally
+      expect(typeof query.finally).toBe('function');
+      
+      // Test Symbol.toStringTag
+      expect(query[Symbol.toStringTag]).toBe('CancellableQuery');
+      
+      // Clean up
+      query.catch(() => {});
+    });
+  });
+
+  describe('Query Cancellation', () => {
+    it('should throw InterfaceError when cancelling without backend key data', async () => {
+      const conn = new Connection(connectionOptions);
+      
+      // Without connecting, there's no backend key data
+      await expect(conn.cancelQuery()).rejects.toThrow(InterfaceError);
+      await expect(conn.cancelQuery()).rejects.toThrow('no backend key data');
+    });
+
+    it('should throw ConnectionClosedError when cancelling on closed connection', async () => {
+      const conn = new Connection(connectionOptions);
+      
+      // Manually set backend key data to bypass that check
+      (conn as any).backendKeyData = { processId: 123, secretKey: 456 };
+      (conn as any).closed = true;
+      
+      await expect(conn.cancelQuery()).rejects.toThrow(ConnectionClosedError);
+    });
+
+    it('should have processId getter', () => {
+      const conn = new Connection(connectionOptions);
+      
+      // Without connection, processId should be undefined
+      expect(conn.processId).toBeUndefined();
+      
+      // Set backend key data
+      (conn as any).backendKeyData = { processId: 12345, secretKey: 67890 };
+      
+      expect(conn.processId).toBe(12345);
     });
   });
 });

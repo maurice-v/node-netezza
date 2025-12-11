@@ -28,5 +28,9 @@ module.exports = {
         allowSyntheticDefaultImports: true
       }
     }]
+  },
+  // Handle unhandled rejections gracefully in Node.js 24+
+  testEnvironmentOptions: {
+    customExportConditions: ['node', 'node-addons']
   }
 };

@@ -52,7 +52,21 @@ async function example() {
       'SELECT * FROM customers WHERE id = ?',
       [2]
     );
-    console.log('Result:', singleResult.rows[0]);
+    console.log('✓ Result:', singleResult.rows[0]);
+
+    // Test query that will fail
+    console.log('\nTesting error handling with invalid query...');
+    try {
+      await conn.execute('SELECT * FROM non_existent_table');
+      console.log('✗ Query succeeded (unexpected)');
+    } catch (err) {
+      console.log('✓ Query failed as expected:', err.message);
+    }
+
+    // Connection should still work after error
+    console.log('\nVerifying connection health after error...');
+    const healthCheck = await conn.execute('SELECT 123 as health_check');
+    console.log('✓ Connection is healthy:', healthCheck.rows[0]);
 
     // Update data
     console.log('\nUpdating customer age...');
