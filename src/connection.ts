@@ -720,6 +720,9 @@ export class Connection {
   /**
    * Cancel the currently running query
    * Opens a separate connection to send a cancel request to the server
+   * 
+   * Protocol implementation reference: https://github.com/KrzysztofDusko/JustyBase.NetezzaDriver
+   * Thanks to @KrzysztofDusko for the protocol documentation and reference implementation
    */
   async cancelQuery(): Promise<void> {
     if (!this.backendKeyData) {

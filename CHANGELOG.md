@@ -10,6 +10,7 @@ All notable changes to node-netezza will be documented in this file.
   - Cancel running queries via separate backend connection
   - Works with both direct connections and pooled connections
   - Proper error handling with `QueryCancelledError`
+  - Protocol implementation based on reference from [@KrzysztofDusko](https://github.com/KrzysztofDusko)'s [JustyBase.NetezzaDriver](https://github.com/KrzysztofDusko/JustyBase.NetezzaDriver)
 
 ## [1.2.0] - 2025-11-19
 
