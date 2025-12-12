@@ -1,8 +1,8 @@
 /**
  * Example: Cancelling a running query
  * 
- * This example demonstrates how to cancel a long-running query using
- * the execute() method with cancellable flag.
+ * This example demonstrates how to cancel a long-running query.
+ * The execute() method always returns a cancellable query by default.
  */
 
 const { connect } = require('../dist');
@@ -161,30 +161,6 @@ async function cancelWithAbortPattern(conn) {
     } else {
       console.log('Query 1 error:', error.message);
     }
-  }
-}
-
-/**
- * Example 4: Utility function for queries with timeout
- */
-async function executeWithTimeout(conn, sql, timeoutMs) {
-  const query = conn.execute(sql);
-  let timeoutId;
-  
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(async () => {
-      await query.cancel();
-      reject(new Error(`Query timeout after ${timeoutMs}ms`));
-    }, timeoutMs);
-  });
-
-  try {
-    const result = await Promise.race([query, timeoutPromise]);
-    clearTimeout(timeoutId);
-    return result;
-  } catch (err) {
-    clearTimeout(timeoutId);
-    throw err;
   }
 }
 

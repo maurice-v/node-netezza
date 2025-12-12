@@ -746,9 +746,6 @@ export class Connection {
 
     this.debugLog('Cancelling query, PID:', this.backendKeyData.processId, 'Key:', this.backendKeyData.secretKey);
 
-    // Mark the query as cancelled
-    this.queryIsCancelled = true;
-
     return new Promise<void>((resolve, reject) => {
       // Open a new socket for the cancel request
       const cancelSocket = net.createConnection({
@@ -759,23 +756,28 @@ export class Connection {
 
       let settled = false;
       
-      cancelSocket.on('error', (err) => {
+      const errorHandler = (err: Error) => {
         if (!settled) {
           settled = true;
           this.debugLog('Cancel socket error:', err.message);
+          cancelSocket.removeAllListeners();
           cancelSocket.destroy();
           reject(new OperationalError(`Cancel request failed: ${err.message}`));
         }
-      });
-
-      cancelSocket.on('timeout', () => {
+      };
+      
+      const timeoutHandler = () => {
         if (!settled) {
           settled = true;
           this.debugLog('Cancel socket timeout');
+          cancelSocket.removeAllListeners();
           cancelSocket.destroy();
           reject(new OperationalError('Cancel request timeout'));
         }
-      });
+      };
+      
+      cancelSocket.on('error', errorHandler);
+      cancelSocket.on('timeout', timeoutHandler);
 
       cancelSocket.on('connect', () => {
         this.debugLog('Cancel socket connected');
@@ -788,8 +790,21 @@ export class Connection {
         cancelMessage.writeInt32BE(this.backendKeyData!.processId, 8);              // Backend process ID
         cancelMessage.writeInt32BE(this.backendKeyData!.secretKey, 12);             // Backend secret key
 
-        cancelSocket.write(cancelMessage, () => {
+        cancelSocket.write(cancelMessage, (err) => {
+          if (err) {
+            this.debugLog('Cancel request write error:', err);
+            if (!settled) {
+              settled = true;
+              cancelSocket.destroy();
+              reject(new Error(`Failed to send cancel request: ${err.message}`));
+            }
+            return;
+          }
+          
           this.debugLog('Cancel request sent');
+          
+          // Mark the query as cancelled after successfully sending the cancel request
+          this.queryIsCancelled = true;
           
           let timeoutId: NodeJS.Timeout | undefined;
           let resolved = false;
@@ -801,6 +816,8 @@ export class Connection {
             }
             cancelSocket.removeAllListeners('data');
             cancelSocket.removeAllListeners('end');
+            cancelSocket.removeAllListeners('error');
+            cancelSocket.removeAllListeners('timeout');
           };
           
           const resolveOnce = () => {
@@ -864,8 +881,8 @@ export class Connection {
         const messageType = await this.readBytes(1);
         this.debugLog('Drain message type:', messageType[0], 'char:', String.fromCharCode(messageType[0]));
         
-        // Read unused bytes and length
-        await this.readBytes(4);
+        // Netezza protocol: type (1) + unused (4) + length (4) + data
+        await this.readBytes(4); // unused bytes
         const length = await this.readInt32();
         const data = await this.readBytes(length);
         

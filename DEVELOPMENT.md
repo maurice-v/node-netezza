@@ -27,7 +27,7 @@
 
 4. **Error Handling** (`src/errors.ts`)
    - Comprehensive error hierarchy
-   - DB-API 2.0 compliant error types
+   - Standard database error types (InterfaceError, DatabaseError, OperationalError, etc.)
 
 ## Protocol Flow
 

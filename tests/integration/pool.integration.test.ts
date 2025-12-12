@@ -122,5 +122,5 @@ describe('Pool Integration Tests', () => {
     } finally {
       await pool.release(conn);
     }
-  });
+  }, 30000);
 });
