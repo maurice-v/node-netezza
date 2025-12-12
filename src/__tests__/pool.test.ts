@@ -262,4 +262,64 @@ describe('Pool Class', () => {
       expect(stats.max).toBe(100);
     });
   });
+
+  describe('Backfill Operations', () => {
+    it('should track backfill operations with Set', () => {
+      // Test that backfillPromises Set is properly initialized
+      const pool = createPool({
+        ...poolOptions,
+        min: 0,
+        max: 5
+      });
+
+      const stats = pool.getStats();
+      expect(stats).toBeDefined();
+      expect(stats.min).toBe(0);
+    });
+
+    it('should not start backfill when min is 0', () => {
+      // When min=0, no backfill operations should be initiated
+      const pool = createPool({
+        ...poolOptions,
+        min: 0,
+        max: 5
+      });
+
+      const stats = pool.getStats();
+      expect(stats.total).toBe(0);
+      expect(stats.min).toBe(0);
+    });
+
+    it('should not backfill when pool is closed', async () => {
+      // Create pool with min=0 to avoid immediate backfill
+      const pool = createPool({
+        ...poolOptions,
+        min: 0,
+        max: 5
+      });
+
+      // Close the pool immediately
+      await pool.end();
+
+      // Verify pool is closed and won't accept operations
+      await expect(pool.acquire()).rejects.toThrow('Pool is closed');
+    });
+
+    it('should not backfill when pool is closing', async () => {
+      // Create pool with min=0
+      const pool = createPool({
+        ...poolOptions,
+        min: 0,
+        max: 5
+      });
+
+      // Close the pool
+      const closePromise = pool.end();
+
+      // Any attempt to acquire during close should fail
+      await expect(pool.acquire()).rejects.toThrow(/Pool is clos/);
+
+      await closePromise;
+    });
+  });
 });

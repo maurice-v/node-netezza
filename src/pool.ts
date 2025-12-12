@@ -541,6 +541,7 @@ export class Pool {
           .catch(err => {
             this.backfillPromises.delete(promise);
             this.debugLog(`Backfill connection failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.backfillConnections();
           });
         this.backfillPromises.add(promise);
       }
