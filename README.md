@@ -438,6 +438,12 @@ Returns the backend process ID for this connection, or `undefined` if not connec
 
 Closes the connection.
 
+## Acknowledgments
+
+This driver was developed by studying the Netezza protocol and referencing existing implementations including:
+- [IBM nzpy](https://github.com/IBM/nzpy) - Python driver for IBM Netezza
+- [JustyBase.NetezzaDriver](https://github.com/KrzysztofDusko/JustyBase.NetezzaDriver) - Protocol reference
+
 ## License
 
 BSD-3-Clause
