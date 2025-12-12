@@ -7,7 +7,8 @@ import {
   OperationalError,
   ConnectionClosedError,
   DatabaseError,
-  ProgrammingError
+  ProgrammingError,
+  QueryCancelledError
 } from './errors';
 import * as protocol from './protocol';
 import { getTypeConverter, TypeConverterContext } from './types';
@@ -73,7 +74,70 @@ export interface FieldDescription {
 }
 
 /**
+ * Cancellable query wrapper
+ * Allows cancelling a running query using the cancel() method
+ */
+export class CancellableQuery<T = QueryResult> implements Promise<T> {
+  private _promise: Promise<T>;
+  private _cancelFn: () => Promise<void>;
+  private _cancelled: boolean = false;
+
+  constructor(promise: Promise<T>, cancelFn: () => Promise<void>) {
+    this._promise = promise;
+    this._cancelFn = cancelFn;
+  }
+
+  /**
+   * Cancel the running query
+   * Sends a cancel request to the server via a separate connection
+   */
+  async cancel(): Promise<void> {
+    if (this._cancelled) {
+      return;
+    }
+    this._cancelled = true;
+    await this._cancelFn();
+  }
+
+  /**
+   * Whether the query has been cancelled
+   */
+  get isCancelled(): boolean {
+    return this._cancelled;
+  }
+
+  // Promise implementation
+  then<TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null
+  ): Promise<TResult1 | TResult2> {
+    return this._promise.then(onfulfilled, onrejected);
+  }
+
+  catch<TResult = never>(
+    onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null
+  ): Promise<T | TResult> {
+    return this._promise.catch(onrejected);
+  }
+
+  finally(onfinally?: (() => void) | undefined | null): Promise<T> {
+    return this._promise.finally(onfinally);
+  }
+
+  get [Symbol.toStringTag](): string {
+    return 'CancellableQuery';
+  }
+}
+
+/**
  * Connection to IBM Netezza database
+ * 
+ * **Important:** Connections do not support concurrent query execution.
+ * Only one query can be active on a connection at a time. If you need to
+ * execute queries concurrently, use multiple connections or a connection pool.
+ * 
+ * This limitation exists because the Netezza protocol (based on PostgreSQL)
+ * does not support pipelining or concurrent queries on a single connection.
  */
 export class Connection {
   private options: ConnectionOptions;
@@ -86,6 +150,7 @@ export class Connection {
   private protocol1?: number;
   private protocol2: number = 0;
   private typeConverterContext: TypeConverterContext;
+  private queryIsCancelled: boolean = false;
 
   constructor(options: ConnectionOptions) {
     this.options = {
@@ -579,220 +644,269 @@ export class Connection {
 
   /**
    * Execute a query
+   * 
+   * All queries are cancellable by default. The returned CancellableQuery can be
+   * cancelled using .cancel(), or simply awaited like a normal Promise.
+   * 
+   * **Important:** Only one query can execute at a time on a connection. Do not
+   * execute concurrent queries on the same connection. Use a connection pool if
+   * you need concurrent query execution.
+   * 
+   * @param sql - SQL query to execute
+   * @param params - Optional query parameters (replaces ? placeholders)
+   * 
+   * @example
+   * ```typescript
+   * // Regular query (just await it)
+   * const result = await conn.execute('SELECT * FROM users');
+   * 
+   * // Query with parameters
+   * const result = await conn.execute('SELECT * FROM users WHERE id = ?', [42]);
+   * 
+   * // Cancel a long-running query
+   * const query = conn.execute('SELECT * FROM large_table');
+   * setTimeout(() => query.cancel(), 5000);
+   * try {
+   *   const result = await query;
+   * } catch (error) {
+   *   if (error.code === 'QUERY_CANCELLED') {
+   *     console.log('Query was cancelled');
+   *   }
+   * }
+   * ```
    */
-  async execute(sql: string, params?: any[]): Promise<QueryResult> {
-    if (this.closed || !this.socket) {
-      throw new ConnectionClosedError();
+  execute(sql: string, params?: any[]): CancellableQuery<QueryResult> {
+    const queryPromise = (async (): Promise<QueryResult> => {
+      if (this.closed || !this.socket) {
+        throw new ConnectionClosedError();
+      }
+
+      // Reset cancellation state
+      this.queryIsCancelled = false;
+
+      // Replace ? placeholders with escaped values (client-side parameter substitution)
+      if (params && params.length > 0) {
+        let paramIndex = 0;
+        sql = sql.replace(/\?/g, () => {
+          const param = params[paramIndex++];
+          // Simple parameter escaping - for production, use proper escaping
+          if (param === null || param === undefined) {
+            return 'NULL';
+          } else if (typeof param === 'string') {
+            // Escape single quotes by doubling them
+            return `'${param.replace(/'/g, "''")}'`;
+          } else if (typeof param === 'number') {
+            return String(param);
+          } else if (typeof param === 'boolean') {
+            return param ? 'TRUE' : 'FALSE';
+          } else if (param instanceof Date) {
+            return `'${param.toISOString()}'`;
+          } else {
+            return `'${String(param).replace(/'/g, "''")}'`;
+          }
+        });
+      }
+
+      // Send query message
+      const sqlBuffer = Buffer.from(sql + '\0', 'utf8');
+      const payload = Buffer.alloc(1 + 4 + sqlBuffer.length);
+      
+      payload[0] = protocol.MESSAGE_TYPE_QUERY;
+      payload.writeInt32BE(4 + sqlBuffer.length, 1);
+      sqlBuffer.copy(payload, 5);
+      
+      this.sendRawMessage(payload);
+      
+      // Read response
+      return await this.readQueryResponse();
+    })();
+
+    const cancelFn = async (): Promise<void> => {
+      await this.cancelQuery();
+    };
+
+    return new CancellableQuery(queryPromise, cancelFn);
+  }
+
+  /**
+   * Cancel the currently running query
+   * Opens a separate connection to send a cancel request to the server
+   * 
+   * Protocol implementation reference: https://github.com/KrzysztofDusko/JustyBase.NetezzaDriver
+   * Thanks to @KrzysztofDusko for the protocol documentation and reference implementation
+   */
+  async cancelQuery(): Promise<void> {
+    if (!this.backendKeyData) {
+      throw new InterfaceError('Cannot cancel query: no backend key data available');
     }
 
-    // Replace ? placeholders with $1, $2, etc. and substitute parameters
-    if (params && params.length > 0) {
-      let paramIndex = 0;
-      sql = sql.replace(/\?/g, () => {
-        const param = params[paramIndex++];
-        // Simple parameter escaping - for production, use proper escaping
-        if (param === null || param === undefined) {
-          return 'NULL';
-        } else if (typeof param === 'string') {
-          // Escape single quotes by doubling them
-          return `'${param.replace(/'/g, "''")}'`;
-        } else if (typeof param === 'number') {
-          return String(param);
-        } else if (typeof param === 'boolean') {
-          return param ? 'TRUE' : 'FALSE';
-        } else if (param instanceof Date) {
-          return `'${param.toISOString()}'`;
-        } else {
-          return `'${String(param).replace(/'/g, "''")}'`;
-        }
+    if (this.closed) {
+      throw new ConnectionClosedError('Cannot cancel query: connection is closed');
+    }
+
+    this.debugLog('Cancelling query, PID:', this.backendKeyData.processId, 'Key:', this.backendKeyData.secretKey);
+
+    return new Promise<void>((resolve, reject) => {
+      // Open a new socket for the cancel request
+      const cancelSocket = net.createConnection({
+        host: this.options.host!,
+        port: this.options.port!,
+        timeout: this.options.timeout
       });
-    }
 
-    // Always use simple query protocol
-    return await this.executeSimple(sql);
+      let settled = false;
+      
+      const errorHandler = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          this.debugLog('Cancel socket error:', err.message);
+          cancelSocket.removeAllListeners();
+          cancelSocket.destroy();
+          reject(new OperationalError(`Cancel request failed: ${err.message}`));
+        }
+      };
+      
+      const timeoutHandler = () => {
+        if (!settled) {
+          settled = true;
+          this.debugLog('Cancel socket timeout');
+          cancelSocket.removeAllListeners();
+          cancelSocket.destroy();
+          reject(new OperationalError('Cancel request timeout'));
+        }
+      };
+      
+      cancelSocket.on('error', errorHandler);
+      cancelSocket.on('timeout', timeoutHandler);
+
+      cancelSocket.on('connect', () => {
+        this.debugLog('Cancel socket connected');
+        
+        // Build cancel request message
+        // Format: length (4 bytes) + cancel code (4 bytes) + process ID (4 bytes) + secret key (4 bytes)
+        const cancelMessage = Buffer.alloc(16);
+        cancelMessage.writeInt32BE(16, 0);                                          // Length (including itself)
+        cancelMessage.writeInt32BE(protocol.CANCEL_REQUEST_CODE, 4);                // Cancel request code
+        cancelMessage.writeInt32BE(this.backendKeyData!.processId, 8);              // Backend process ID
+        cancelMessage.writeInt32BE(this.backendKeyData!.secretKey, 12);             // Backend secret key
+
+        cancelSocket.write(cancelMessage, (err) => {
+          if (err) {
+            this.debugLog('Cancel request write error:', err);
+            if (!settled) {
+              settled = true;
+              cancelSocket.destroy();
+              reject(new OperationalError(`Failed to send cancel request: ${err.message}`));
+            }
+            return;
+          }
+          
+          this.debugLog('Cancel request sent');
+          
+          // Mark the query as cancelled after successfully sending the cancel request
+          this.queryIsCancelled = true;
+          
+          let timeoutId: NodeJS.Timeout | undefined;
+          let resolved = false;
+          
+          const cleanup = () => {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+              timeoutId = undefined;
+            }
+            cancelSocket.removeAllListeners('data');
+            cancelSocket.removeAllListeners('end');
+            cancelSocket.removeAllListeners('error');
+            cancelSocket.removeAllListeners('timeout');
+          };
+          
+          const resolveOnce = () => {
+            if (!resolved && !settled) {
+              resolved = true;
+              settled = true;
+              cleanup();
+              cancelSocket.destroy();
+              resolve();
+            }
+          };
+          
+          // Read the response (server will close connection after acknowledging)
+          cancelSocket.once('data', (data) => {
+            this.debugLog('Cancel response:', data.toString('hex'));
+            resolveOnce();
+          });
+
+          // Server may also just close the connection without sending data
+          cancelSocket.once('end', () => {
+            this.debugLog('Cancel socket closed by server');
+            resolveOnce();
+          });
+
+          // Set a short timeout for the response
+          timeoutId = setTimeout(() => {
+            this.debugLog('Cancel response timeout, assuming success');
+            resolveOnce();
+          }, 1000);
+        });
+      });
+    });
   }
 
   /**
-   * Execute simple query (no parameters)
+   * Get the backend process ID for this connection
    */
-  private async executeSimple(sql: string): Promise<QueryResult> {
-    // Send query message
-    const sqlBuffer = Buffer.from(sql + '\0', 'utf8');
-    const payload = Buffer.alloc(1 + 4 + sqlBuffer.length);
-    
-    payload[0] = protocol.MESSAGE_TYPE_QUERY;
-    payload.writeInt32BE(4 + sqlBuffer.length, 1);
-    sqlBuffer.copy(payload, 5);
-    
-    this.sendRawMessage(payload);
-    
-    // Read response
-    return await this.readQueryResponse();
+  get processId(): number | undefined {
+    return this.backendKeyData?.processId;
   }
 
   /**
-   * Execute extended query (with parameters)
+   * Drain messages until ReadyForQuery is received
+   * Used after cancellation to ensure connection is in a clean state
    */
-  private async executeExtended(sql: string, params: any[]): Promise<QueryResult> {
-    const portalName = '';
-    const statementName = '';
+  private async drainUntilReady(): Promise<void> {
+    this.debugLog('Draining messages until ReadyForQuery...');
     
-    // Parse
-    await this.sendParse(statementName, sql);
+    const maxIterations = 1000; // Prevent infinite loops
+    let iterations = 0;
     
-    // Bind
-    await this.sendBind(portalName, statementName, params);
-    
-    // Describe
-    await this.sendDescribe('P', portalName);
-    
-    // Execute
-    await this.sendExecute(portalName, 0);
-    
-    // Sync
-    await this.sendSync();
-    
-    // Read responses
-    return await this.readExtendedQueryResponse();
-  }
-
-  /**
-   * Send Parse message
-   */
-  private sendParse(statementName: string, sql: string): void {
-    const stmtBuffer = Buffer.from(statementName + '\0', 'utf8');
-    const sqlBuffer = Buffer.from(sql + '\0', 'utf8');
-    const paramTypes = Buffer.alloc(2); // No type OIDs
-    paramTypes.writeUInt16BE(0, 0);
-    
-    const payload = Buffer.alloc(
-      1 + 4 + stmtBuffer.length + sqlBuffer.length + paramTypes.length
-    );
-    
-    let offset = 0;
-    payload[offset++] = protocol.MESSAGE_TYPE_PARSE;
-    payload.writeInt32BE(
-      4 + stmtBuffer.length + sqlBuffer.length + paramTypes.length,
-      offset
-    );
-    offset += 4;
-    stmtBuffer.copy(payload, offset);
-    offset += stmtBuffer.length;
-    sqlBuffer.copy(payload, offset);
-    offset += sqlBuffer.length;
-    paramTypes.copy(payload, offset);
-    
-    this.sendRawMessage(payload);
-  }
-
-  /**
-   * Send Bind message
-   */
-  private sendBind(portalName: string, statementName: string, params: any[]): void {
-    const portalBuffer = Buffer.from(portalName + '\0', 'utf8');
-    const stmtBuffer = Buffer.from(statementName + '\0', 'utf8');
-    
-    // Format codes for parameters (0 = text)
-    const formatCodes = Buffer.alloc(2);
-    formatCodes.writeUInt16BE(0, 0);
-    
-    // Encode parameters
-    const paramBuffers: Buffer[] = [];
-    const paramCount = Buffer.alloc(2);
-    paramCount.writeUInt16BE(params.length, 0);
-    
-    for (const param of params) {
-      if (param === null || param === undefined) {
-        const lenBuf = Buffer.alloc(4);
-        lenBuf.writeInt32BE(-1, 0);
-        paramBuffers.push(lenBuf);
-      } else {
-        const valueStr = String(param);
-        const valueBuf = Buffer.from(valueStr, 'utf8');
-        const lenBuf = Buffer.alloc(4);
-        lenBuf.writeInt32BE(valueBuf.length, 0);
-        paramBuffers.push(Buffer.concat([lenBuf, valueBuf]));
+    while (iterations < maxIterations) {
+      iterations++;
+      
+      try {
+        // Check if connection is still alive
+        if (!this.socket || this.socket.destroyed) {
+          throw new ConnectionClosedError('Connection closed during drain');
+        }
+        
+        const messageType = await this.readBytes(1);
+        this.debugLog('Drain message type:', messageType[0], 'char:', String.fromCharCode(messageType[0]));
+        
+        // Netezza protocol: type (1) + unused (4) + length (4) + data
+        await this.readBytes(4); // unused bytes
+        const length = await this.readInt32();
+        const data = await this.readBytes(length);
+        
+        if (messageType[0] === protocol.MESSAGE_TYPE_READY_FOR_QUERY) {
+          this.debugLog('Drain complete - ReadyForQuery received');
+          this.transactionStatus = data[0];
+          return;
+        }
+        
+        // Log but continue draining for other message types
+        this.debugLog('Drained message type:', messageType[0], 'length:', length);
+      } catch (error) {
+        // If connection error occurs during drain, log and re-throw
+        this.debugLog('Error during drain:', error);
+        throw new OperationalError(
+          `Failed to drain messages: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
     
-    // Result format codes (0 = text)
-    const resultFormats = Buffer.alloc(2);
-    resultFormats.writeUInt16BE(0, 0);
-    
-    const totalLength =
-      1 + 4 + portalBuffer.length + stmtBuffer.length +
-      formatCodes.length + paramCount.length +
-      paramBuffers.reduce((sum, buf) => sum + buf.length, 0) +
-      resultFormats.length;
-    
-    const payload = Buffer.alloc(totalLength);
-    let offset = 0;
-    
-    payload[offset++] = protocol.MESSAGE_TYPE_BIND;
-    payload.writeInt32BE(totalLength - 1, offset);
-    offset += 4;
-    portalBuffer.copy(payload, offset);
-    offset += portalBuffer.length;
-    stmtBuffer.copy(payload, offset);
-    offset += stmtBuffer.length;
-    formatCodes.copy(payload, offset);
-    offset += formatCodes.length;
-    paramCount.copy(payload, offset);
-    offset += paramCount.length;
-    
-    for (const paramBuf of paramBuffers) {
-      paramBuf.copy(payload, offset);
-      offset += paramBuf.length;
-    }
-    
-    resultFormats.copy(payload, offset);
-    
-    this.sendRawMessage(payload);
-  }
-
-  /**
-   * Send Describe message
-   */
-  private sendDescribe(type: string, name: string): void {
-    const nameBuffer = Buffer.from(name + '\0', 'utf8');
-    const payload = Buffer.alloc(1 + 4 + 1 + nameBuffer.length);
-    
-    let offset = 0;
-    payload[offset++] = protocol.MESSAGE_TYPE_DESCRIBE;
-    payload.writeInt32BE(4 + 1 + nameBuffer.length, offset);
-    offset += 4;
-    payload[offset++] = type.charCodeAt(0);
-    nameBuffer.copy(payload, offset);
-    
-    this.sendRawMessage(payload);
-  }
-
-  /**
-   * Send Execute message
-   */
-  private sendExecute(portalName: string, maxRows: number): void {
-    const nameBuffer = Buffer.from(portalName + '\0', 'utf8');
-    const payload = Buffer.alloc(1 + 4 + nameBuffer.length + 4);
-    
-    let offset = 0;
-    payload[offset++] = protocol.MESSAGE_TYPE_EXECUTE;
-    payload.writeInt32BE(4 + nameBuffer.length + 4, offset);
-    offset += 4;
-    nameBuffer.copy(payload, offset);
-    offset += nameBuffer.length;
-    payload.writeInt32BE(maxRows, offset);
-    
-    this.sendRawMessage(payload);
-  }
-
-  /**
-   * Send Sync message
-   */
-  private sendSync(): void {
-    const payload = Buffer.alloc(5);
-    payload[0] = protocol.MESSAGE_TYPE_SYNC;
-    payload.writeInt32BE(4, 1);
-    this.sendRawMessage(payload);
+    // If we hit max iterations, something is wrong
+    throw new OperationalError(
+      `Failed to receive ReadyForQuery after ${maxIterations} messages. Connection may be in an invalid state.`
+    );
   }
 
   /**
@@ -842,73 +956,21 @@ export class Connection {
         return result;
       } else if (messageType[0] === protocol.MESSAGE_TYPE_ERROR_RESPONSE) {
         const error = this.parseErrorResponse(data);
+        // Check if this error is due to query cancellation
+        if (this.queryIsCancelled) {
+          this.queryIsCancelled = false; // Reset for next query
+          // After cancellation, we need to wait for ReadyForQuery before throwing
+          // to ensure the connection is in a clean state
+          await this.drainUntilReady();
+          throw new QueryCancelledError(error.message || 'Query was cancelled');
+        }
+        // For any error, drain until ready to ensure connection is in clean state
+        await this.drainUntilReady();
         throw new DatabaseError(error.message);
       } else if (messageType[0] === protocol.MESSAGE_TYPE_EMPTY_QUERY) {
         // Empty query
       } else if (messageType[0] === protocol.MESSAGE_TYPE_NOTICE_RESPONSE) {
         // Ignore notices for now
-      }
-    }
-  }
-
-  /**
-   * Read extended query response
-   */
-  private async readExtendedQueryResponse(): Promise<QueryResult> {
-    const result: QueryResult = {
-      rows: [],
-      rowCount: 0
-    };
-    
-    let fields: FieldDescription[] | undefined;
-    
-    while (true) {
-      const messageType = await this.readBytes(1);
-      this.debugLog('Extended query response message type:', messageType[0], 'hex:', messageType[0].toString(16), 'char:', String.fromCharCode(messageType[0]));
-      
-      // Netezza uses handshake format: type + unused (4 bytes) + length (4 bytes) + data
-      const unused = await this.readBytes(4);
-      this.debugLog('Extended unused bytes:', unused.toString('hex'));
-      const length = await this.readInt32();
-      this.debugLog('Extended query response length:', length);
-      const data = await this.readBytes(length);
-      this.debugLog('Extended query response data (first 100 bytes):', data.slice(0, 100).toString('hex'));
-      
-      if (messageType[0] === protocol.MESSAGE_TYPE_PARSE_COMPLETE) {
-        this.debugLog('Parse complete');
-        // Parse complete
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_BIND_COMPLETE) {
-        this.debugLog('Bind complete');
-        // Bind complete
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_ROW_DESCRIPTION) {
-        fields = this.parseRowDescription(data);
-        result.fields = fields;
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_NO_DATA) {
-        this.debugLog('No data');
-        // No data (for non-SELECT queries)
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_DATA_ROW) {
-        if (fields) {
-          const row = this.parseDataRow(data, fields);
-          (result.rows as any[]).push(row);
-        }
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_COMMAND_COMPLETE) {
-        const commandStr = data.toString('utf8', 0, data.length - 1);
-        result.command = commandStr;
-        this.debugLog('Command complete:', commandStr);
-        
-        const match = commandStr.match(/(\d+)$/);
-        if (match) {
-          result.rowCount = parseInt(match[1], 10);
-        } else {
-          result.rowCount = result.rows.length;
-        }
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_READY_FOR_QUERY) {
-        this.debugLog('Ready for query in extended');
-        this.transactionStatus = data[0];
-        return result;
-      } else if (messageType[0] === protocol.MESSAGE_TYPE_ERROR_RESPONSE) {
-        const error = this.parseErrorResponse(data);
-        throw new DatabaseError(error.message);
       }
     }
   }

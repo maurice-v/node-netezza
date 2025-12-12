@@ -113,6 +113,7 @@ export class Pool {
   private availableConnections: Connection[] = [];
   private pendingAcquires: PendingAcquire[] = [];
   private evictionTimer?: NodeJS.Timeout;
+  private backfillPromises: Set<Promise<void>> = new Set();
   private closing: boolean = false;
   private closed: boolean = false;
 
@@ -149,29 +150,26 @@ export class Pool {
   }
 
   /**
+   * Log debug messages if debug mode is enabled
+   */
+  private debugLog(...args: any[]): void {
+    if (this.options.debug) {
+      console.log('[node-netezza:pool]', ...args);
+    }
+  }
+
+  /**
    * Initialize the pool
    */
-  private async initialize(): Promise<void> {
-    // Create minimum connections if min > 0
-    if (this.options.min > 0) {
-      const promises: Promise<void>[] = [];
-      for (let i = 0; i < this.options.min; i++) {
-        promises.push(
-          this.createConnection()
-            .then(conn => {
-              this.availableConnections.push(conn);
-            })
-            .catch(err => {
-              // Ignore errors during initialization
-              console.error('Failed to create initial connection:', err.message);
-            })
-        );
-      }
-      await Promise.allSettled(promises);
-    }
-
+  private initialize(): void {
+    this.debugLog(`Initializing pool: min=${this.options.min}, max=${this.options.max}`);
     // Start eviction timer
     this.startEvictionTimer();
+
+    // Create minimum connections asynchronously if min > 0
+    if (this.options.min > 0) {
+      this.backfillConnections();
+    }
   }
 
   /**
@@ -206,6 +204,8 @@ export class Pool {
       throw new InterfaceError('Pool is closing');
     }
 
+    this.debugLog('Acquiring connection from pool');
+
     // Check if available connection exists
     while (this.availableConnections.length > 0) {
       const conn = this.availableConnections.shift()!;
@@ -214,6 +214,7 @@ export class Pool {
       if (this.options.validateOnBorrow) {
         const isValid = await this.validateConnection(conn);
         if (!isValid) {
+          this.debugLog('Connection validation failed, removing from pool');
           // Remove invalid connection
           this.removeConnection(conn);
           continue;
@@ -227,12 +228,14 @@ export class Pool {
         metadata.useCount++;
       }
 
+      this.debugLog(`Acquired existing connection (total: ${this.connections.size}, available: ${this.availableConnections.length})`);
       return conn;
     }
 
     // Try to create new connection if below max
     if (this.connections.size < this.options.max) {
       try {
+        this.debugLog(`Creating new connection (total: ${this.connections.size}/${this.options.max})`);
         const conn = await this.createConnection();
 
         const metadata = this.connections.get(conn);
@@ -241,8 +244,10 @@ export class Pool {
           metadata.useCount++;
         }
 
+        this.debugLog(`Acquired new connection (total: ${this.connections.size})`);
         return conn;
       } catch (err) {
+        this.debugLog(`Failed to create new connection: ${err instanceof Error ? err.message : String(err)}`);
         // If creation failed and no connections available, throw error
         if (this.availableConnections.length === 0 && this.connections.size === 0) {
           throw err;
@@ -278,10 +283,13 @@ export class Pool {
       throw new InterfaceError('Connection does not belong to this pool');
     }
 
+    this.debugLog('Releasing connection back to pool');
+
     // Validate if needed
     if (this.options.validateOnReturn) {
       const isValid = await this.validateConnection(connection);
       if (!isValid) {
+        this.debugLog('Connection validation failed on return, removing from pool');
         this.removeConnection(connection);
         return;
       }
@@ -295,6 +303,7 @@ export class Pool {
 
     // Check if pending acquires exist
     if (this.pendingAcquires.length > 0) {
+      this.debugLog(`Reusing connection for pending acquire (${this.pendingAcquires.length} pending)`);
       const pending = this.pendingAcquires.shift()!;
       clearTimeout(pending.timeout);
       pending.resolve(connection);
@@ -302,6 +311,7 @@ export class Pool {
     }
 
     // Return to available pool
+    this.debugLog(`Returned connection to pool (available: ${this.availableConnections.length + 1})`);
     this.availableConnections.push(connection);
   }
 
@@ -327,25 +337,36 @@ export class Pool {
       return;
     }
 
+    this.debugLog('Closing pool...');
     this.closing = true;
 
     // Stop eviction timer
     this.stopEvictionTimer();
 
     // Reject all pending acquires
+    if (this.pendingAcquires.length > 0) {
+      this.debugLog(`Rejecting ${this.pendingAcquires.length} pending acquire requests`);
+    }
     for (const pending of this.pendingAcquires) {
       clearTimeout(pending.timeout);
       pending.reject(new InterfaceError('Pool is closing'));
     }
     this.pendingAcquires = [];
 
+    // Wait for any pending backfill operations
+    if (this.backfillPromises.size > 0) {
+      this.debugLog(`Waiting for ${this.backfillPromises.size} backfill operations`);
+      await Promise.allSettled(Array.from(this.backfillPromises));
+    }
+
     // Close all connections
+    this.debugLog(`Closing ${this.connections.size} connections`);
     const closePromises: Promise<void>[] = [];
     for (const conn of this.connections.keys()) {
       closePromises.push(
         conn.close().catch(err => {
-          // Ignore errors during close
-          console.error('Error closing connection:', err.message);
+          // Log errors during close if debug is enabled
+          this.debugLog('Error closing connection:', err.message);
         })
       );
     }
@@ -354,8 +375,10 @@ export class Pool {
 
     this.connections.clear();
     this.availableConnections = [];
+    this.backfillPromises.clear();
     this.closed = true;
     this.closing = false;
+    this.debugLog('Pool closed');
   }
 
   /**
@@ -458,6 +481,9 @@ export class Pool {
       }
     }
 
+    if (connectionsToRemove.length > 0) {
+      this.debugLog(`Evicting ${connectionsToRemove.length} idle connections`);
+    }
     for (const conn of connectionsToRemove) {
       this.removeConnection(conn);
     }
@@ -482,6 +508,9 @@ export class Pool {
       }
     }
 
+    if (connectionsToRemove.length > 0) {
+      this.debugLog(`Evicting ${connectionsToRemove.length} expired connections`);
+    }
     for (const conn of connectionsToRemove) {
       this.removeConnection(conn);
     }
@@ -491,24 +520,30 @@ export class Pool {
    * Backfill connections to reach min size
    */
   private backfillConnections(): void {
-    if (this.options.min === 0) {
+    if (this.options.min === 0 || this.closed || this.closing) {
       return;
     }
 
-    const deficit = this.options.min - this.connections.size;
+    const deficit = this.options.min - this.connections.size - this.backfillPromises.size;
     if (deficit > 0) {
+      this.debugLog(`Backfilling ${deficit} connections to reach min=${this.options.min}`);
       for (let i = 0; i < deficit; i++) {
-        this.createConnection()
+        const promise = this.createConnection()
           .then(conn => {
+            this.backfillPromises.delete(promise);
             if (!this.closed && !this.closing) {
+              this.debugLog(`Backfill connection created (total: ${this.connections.size})`);
               this.availableConnections.push(conn);
             } else {
               conn.close().catch(() => {});
             }
           })
           .catch(err => {
-            // Ignore errors during backfill
+            this.backfillPromises.delete(promise);
+            this.debugLog(`Backfill connection failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.backfillConnections();
           });
+        this.backfillPromises.add(promise);
       }
     }
   }

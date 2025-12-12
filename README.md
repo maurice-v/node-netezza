@@ -9,6 +9,7 @@ A pure JavaScript/TypeScript driver for IBM Netezza that provides a modern Node.
 - Promise-based API
 - Native connection pooling with min/max sizing and automatic eviction
 - Parameterized queries with `?` placeholders
+- **Query cancellation support** - cancel long-running queries programmatically
 - Support for all major Netezza data types
 - Raw value option for BIGINT, DATE, TIMESTAMP to avoid overflow and timezone issues
 - Transaction support
@@ -145,6 +146,102 @@ When enabled, debug output is prefixed with `[node-netezza]` and includes:
 - Field descriptions and data parsing
 
 **Note:** Debug mode should only be used during development as it produces verbose output.
+
+## Query Cancellation
+
+All queries are cancellable by default. The `execute()` method returns a `CancellableQuery` which implements the Promise interface, so you can await it normally or use the `.cancel()` method to cancel long-running queries.
+
+### Cancelling Queries
+
+```javascript
+const { connect } = require('node-netezza');
+
+async function runCancellableQuery() {
+  const conn = await connect({
+    user: 'admin',
+    password: 'password',
+    database: 'db1'
+  });
+
+  // Start a potentially long-running query
+  const query = conn.execute('SELECT * FROM huge_table WHERE complex_condition');
+
+  // Set up a timeout to cancel after 30 seconds
+  const timeoutId = setTimeout(async () => {
+    console.log('Query is taking too long, cancelling...');
+    await query.cancel();
+  }, 30000);
+
+  try {
+    const result = await query;
+    clearTimeout(timeoutId);
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.code === 'QUERY_CANCELLED') {
+      console.log('Query was cancelled successfully');
+      return null;
+    }
+    throw error;
+  } finally {
+    await conn.close();
+  }
+}
+```
+
+### Using cancelQuery() Directly
+
+You can also call `cancelQuery()` directly on the connection:
+
+```javascript
+const conn = await connect({...});
+
+// Start query (don't await yet)
+const queryPromise = conn.execute('SELECT * FROM large_table');
+
+// Cancel after some condition
+setTimeout(() => {
+  conn.cancelQuery().catch(console.error);
+}, 5000);
+
+try {
+  const result = await queryPromise;
+} catch (error) {
+  if (error.code === 'QUERY_CANCELLED') {
+    console.log('Query was cancelled');
+  }
+}
+```
+
+### CancellableQuery Properties
+
+The `CancellableQuery` object returned by `execute()` has:
+
+- `cancel()`: Async method to cancel the running query
+- `isCancelled`: Boolean indicating if cancellation was requested
+- Implements `Promise` interface (can be awaited directly)
+
+### Error Handling
+
+When a query is cancelled, a `QueryCancelledError` is thrown with:
+
+- `name`: `'QueryCancelledError'`
+- `code`: `'QUERY_CANCELLED'` (use this for reliable error type checking)
+- `message`: Error message from the server
+
+```javascript
+const { QueryCancelledError } = require('node-netezza');
+
+try {
+  const result = await query;
+} catch (error) {
+  if (error instanceof QueryCancelledError) {
+    // Handle cancellation
+  } else if (error.code === 'QUERY_CANCELLED') {
+    // Alternative check using error code
+  }
+}
+```
 
 ## Connection Pooling
 
@@ -297,17 +394,55 @@ Creates a new connection to Netezza.
 
 #### `connection.execute(sql, params?)`
 
-Executes a SQL statement and returns results.
+Executes a SQL statement and returns a cancellable query.
 
 **Parameters:**
 - `sql` (string): SQL statement with `?` placeholders
-- `params` (array, optional): Parameter values
+- `params` (array, optional): Query parameters array
 
-**Returns:** Promise<QueryResult>
+**Returns:** CancellableQuery<QueryResult>
+- Can be awaited like a normal Promise
+- `cancel()`: Async method to cancel the query
+- `isCancelled`: Boolean indicating if cancel was called
+
+**Examples:**
+```typescript
+// Regular query
+await conn.execute('SELECT * FROM users');
+
+// Query with parameters
+await conn.execute('SELECT * FROM users WHERE id = ?', [42]);
+
+// Cancellable query
+const query = conn.execute('SELECT * FROM large_table');
+setTimeout(() => query.cancel(), 5000);
+```
+
+#### `connection.cancelQuery()`
+
+Cancels the currently running query on this connection.
+
+**Returns:** Promise<void>
+
+**Throws:**
+- `InterfaceError`: If no backend key data is available (not connected)
+- `ConnectionClosedError`: If the connection is closed
+
+#### `connection.processId`
+
+Returns the backend process ID for this connection, or `undefined` if not connected.
+
+**Type:** number | undefined
 
 #### `connection.close()`
 
 Closes the connection.
+
+## Acknowledgments
+
+This driver was developed by studying the Netezza protocol and referencing existing implementations including:
+- [IBM nzpy](https://github.com/IBM/nzpy) - Python driver for IBM Netezza
+- [JustyBase.NetezzaDriver](https://github.com/KrzysztofDusko/JustyBase.NetezzaDriver) - Protocol reference
 
 ## License
 

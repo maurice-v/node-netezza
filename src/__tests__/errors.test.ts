@@ -7,7 +7,8 @@ import {
   OperationalError,
   DatabaseError,
   ProgrammingError,
-  ConnectionClosedError
+  ConnectionClosedError,
+  QueryCancelledError
 } from '../errors';
 
 describe('Error Classes', () => {
@@ -117,6 +118,53 @@ describe('Error Classes', () => {
       expect(closedError).not.toBeInstanceOf(OperationalError);
       expect(opError).toBeInstanceOf(OperationalError);
       expect(opError).not.toBeInstanceOf(ConnectionClosedError);
+    });
+  });
+
+  describe('QueryCancelledError', () => {
+    it('should create a QueryCancelledError instance with default message', () => {
+      const error = new QueryCancelledError();
+      expect(error).toBeInstanceOf(QueryCancelledError);
+      expect(error).toBeInstanceOf(OperationalError);
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toBe('Query was cancelled');
+      expect(error.name).toBe('QueryCancelledError');
+      expect(error.code).toBe('QUERY_CANCELLED');
+    });
+
+    it('should create a QueryCancelledError instance with custom message', () => {
+      const error = new QueryCancelledError('User requested cancellation');
+      expect(error).toBeInstanceOf(QueryCancelledError);
+      expect(error.message).toBe('User requested cancellation');
+      expect(error.code).toBe('QUERY_CANCELLED');
+    });
+
+    it('should have the QUERY_CANCELLED error code', () => {
+      const error = new QueryCancelledError();
+      expect(error.code).toBe('QUERY_CANCELLED');
+    });
+
+    it('should be distinguishable by error code', () => {
+      const cancelError = new QueryCancelledError();
+      const opError = new OperationalError('Some error');
+
+      expect(cancelError.code).toBe('QUERY_CANCELLED');
+      expect((opError as any).code).toBeUndefined();
+    });
+
+    it('should extend OperationalError', () => {
+      const error = new QueryCancelledError();
+      expect(error).toBeInstanceOf(OperationalError);
+      expect(error).toBeInstanceOf(DatabaseError);
+    });
+
+    it('should be catchable with error code check', () => {
+      try {
+        throw new QueryCancelledError();
+      } catch (err: any) {
+        expect(err.code).toBe('QUERY_CANCELLED');
+        expect(err instanceof QueryCancelledError).toBe(true);
+      }
     });
   });
 

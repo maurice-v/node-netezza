@@ -83,3 +83,6 @@ export const MESSAGE_TYPE_TERMINATE = 'X'.charCodeAt(0);
 export const TRANSACTION_STATUS_IDLE = 'I'.charCodeAt(0);
 export const TRANSACTION_STATUS_IN_BLOCK = 'T'.charCodeAt(0);
 export const TRANSACTION_STATUS_FAILED = 'E'.charCodeAt(0);
+
+// Cancel request code (PostgreSQL protocol standard: 1234 << 16 | 5678)
+export const CANCEL_REQUEST_CODE = (1234 << 16) | 5678;
