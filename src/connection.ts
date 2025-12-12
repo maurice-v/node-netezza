@@ -796,7 +796,7 @@ export class Connection {
             if (!settled) {
               settled = true;
               cancelSocket.destroy();
-              reject(new Error(`Failed to send cancel request: ${err.message}`));
+              reject(new OperationalError(`Failed to send cancel request: ${err.message}`));
             }
             return;
           }
