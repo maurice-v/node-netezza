@@ -169,15 +169,23 @@ async function cancelWithAbortPattern(conn) {
  */
 async function executeWithTimeout(conn, sql, timeoutMs) {
   const query = conn.execute(sql);
+  let timeoutId;
   
   const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(async () => {
+    timeoutId = setTimeout(async () => {
       await query.cancel();
       reject(new Error(`Query timeout after ${timeoutMs}ms`));
     }, timeoutMs);
   });
 
-  return Promise.race([query, timeoutPromise]);
+  try {
+    const result = await Promise.race([query, timeoutPromise]);
+    clearTimeout(timeoutId);
+    return result;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 // Run the examples

@@ -3,7 +3,7 @@
  */
 
 import { Connection, ConnectionOptions, CancellableQuery } from '../connection';
-import { InterfaceError, OperationalError, ConnectionClosedError, QueryCancelledError } from '../errors';
+import { InterfaceError, ConnectionClosedError } from '../errors';
 import { MockSocket } from '../test-utils/mock-socket';
 import * as protocol from '../protocol';
 

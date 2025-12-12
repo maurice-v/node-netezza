@@ -131,6 +131,13 @@ export class CancellableQuery<T = QueryResult> implements Promise<T> {
 
 /**
  * Connection to IBM Netezza database
+ * 
+ * **Important:** Connections do not support concurrent query execution.
+ * Only one query can be active on a connection at a time. If you need to
+ * execute queries concurrently, use multiple connections or a connection pool.
+ * 
+ * This limitation exists because the Netezza protocol (based on PostgreSQL)
+ * does not support pipelining or concurrent queries on a single connection.
  */
 export class Connection {
   private options: ConnectionOptions;
@@ -641,6 +648,10 @@ export class Connection {
    * All queries are cancellable by default. The returned CancellableQuery can be
    * cancelled using .cancel(), or simply awaited like a normal Promise.
    * 
+   * **Important:** Only one query can execute at a time on a connection. Do not
+   * execute concurrent queries on the same connection. Use a connection pool if
+   * you need concurrent query execution.
+   * 
    * @param sql - SQL query to execute
    * @param params - Optional query parameters (replaces ? placeholders)
    * 
@@ -746,16 +757,24 @@ export class Connection {
         timeout: this.options.timeout
       });
 
+      let settled = false;
+      
       cancelSocket.on('error', (err) => {
-        this.debugLog('Cancel socket error:', err.message);
-        cancelSocket.destroy();
-        reject(new OperationalError(`Cancel request failed: ${err.message}`));
+        if (!settled) {
+          settled = true;
+          this.debugLog('Cancel socket error:', err.message);
+          cancelSocket.destroy();
+          reject(new OperationalError(`Cancel request failed: ${err.message}`));
+        }
       });
 
       cancelSocket.on('timeout', () => {
-        this.debugLog('Cancel socket timeout');
-        cancelSocket.destroy();
-        reject(new OperationalError('Cancel request timeout'));
+        if (!settled) {
+          settled = true;
+          this.debugLog('Cancel socket timeout');
+          cancelSocket.destroy();
+          reject(new OperationalError('Cancel request timeout'));
+        }
       });
 
       cancelSocket.on('connect', () => {
@@ -785,8 +804,9 @@ export class Connection {
           };
           
           const resolveOnce = () => {
-            if (!resolved) {
+            if (!resolved && !settled) {
               resolved = true;
+              settled = true;
               cleanup();
               cancelSocket.destroy();
               resolve();
